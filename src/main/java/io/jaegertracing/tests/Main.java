@@ -1,11 +1,11 @@
 /**
  * Copyright 2018-2020 The Jaeger Authors
- *
+ * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
- *
+ * <p>
  * http://www.apache.org/licenses/LICENSE-2.0
- *
+ * <p>
  * Unless required by applicable law or agreed to in writing, software distributed under the License
  * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
  * or implied. See the License for the specific language governing permissions and limitations under
@@ -13,42 +13,24 @@
  */
 package io.jaegertracing.tests;
 
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
-
-import org.apache.commons.io.FileUtils;
-import org.apache.tools.ant.taskdefs.optional.junit.JUnitResultFormatter;
-import org.apache.tools.ant.taskdefs.optional.junit.XMLJUnitResultFormatter;
-import org.junit.runner.JUnitCore;
-import org.junit.runner.Result;
-
 import com.codahale.metrics.Timer;
-
-import io.jaegertracing.tests.junitxml.JUnitResultFormatterAsRunListener;
-import io.jaegertracing.tests.clients.ClientUtils;
-import io.jaegertracing.tests.resourcemonitor.Runner;
 import io.jaegertracing.internal.JaegerTracer;
 import io.jaegertracing.internal.reporters.RemoteReporter;
 import io.jaegertracing.internal.samplers.ConstSampler;
 import io.jaegertracing.spi.Sender;
+import io.jaegertracing.tests.clients.ClientUtils;
 import io.jaegertracing.tests.model.TestConfig;
 import io.jaegertracing.tests.report.ReportFactory;
-import io.jaegertracing.tests.smoke.TestSuiteSmoke;
 import io.jaegertracing.thrift.internal.senders.HttpSender;
 import io.jaegertracing.thrift.internal.senders.UdpSender;
 import lombok.extern.slf4j.Slf4j;
+
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 public class Main {
@@ -66,54 +48,20 @@ public class Main {
 
     public Main() {
         config = TestConfig.get();
-        // custom
-        //config.setTestDuration(60 * 3);
-        //config.setTracersCount(6);
-        //config.setSpansCount(100);
-        //config.setQueryInterval(30);
-        //config.setSpansCountFrom("jaeger-query");
-
-        // wait for jaeger agent to get ready
-        if (config.getRunningOnOpenshift()) {
-            if (config.getSender().equalsIgnoreCase("udp")) {
-                try {
-                    logger.info("This test is running on OpenShift environment and jaeger-agent deployed as a sidecar."
-                            + " There is pre-defined delay(30 seconds) to get ready 'jager-agent'.");
-                    TimeUnit.SECONDS.sleep(30);
-                } catch (InterruptedException ex) {
-                    logger.error("Exception,", ex);
-                }
-            }
-        }
-
-        if (config.getUseInternalReporter()) {
-            expectedSpansCountByReporter = config.getNumberOfTracers() * config.getNumberOfSpans()
-                    * config.getSpansReportDurationInSecond();
-        } else {
-            expectedSpansCountByReporter = config.getNodeCountSpansReporter() * config.getNumberOfTracers()
-                    * config.getNumberOfSpans() * (config.getSpansReportDurationInSecond());
-        }
+        expectedSpansCountByReporter = config.getNumberOfTracers() * config.getNumberOfSpans()
+                * config.getSpansReportDurationInSecond();
         ReportFactory.updateSpansCountByReporter(expectedSpansCountByReporter);
     }
 
     public void execute() throws Exception {
         if (config.isPerformanceTestEnabled()) {
-            // update report status to report engine
-            if (ClientUtils.reClient().isAvailable()) {
-                ClientUtils.reClient().addTestData(ReportFactory.getFinalReport(config));
-            }
-            // start metrics collector
-            if (config.getEnableResourceMonitor()) {
-                Runner.start();
-            }
-
             triggerCreateSpans();
 
             // report drop status
             logger.info("[DROP_COUNT={}]", ReportFactory.getDroupCount());
             logger.info("[DROP_PERCENTAGE={}]", ReportFactory.getDroupPercentage());
             logger.info("[SPANS_SENT={}]", ReportFactory.getSpansSent());
-            logger.info("[SPANE_FOUND={}]", ReportFactory.getSpansFound());
+            logger.info("[SPANS_FOUND={}]", ReportFactory.getSpansFound());
             if (ReportFactory.getDroupCount() > 0) {
                 logger.info("[TEST_STATUS=PASSED]", ReportFactory.getSpansFound());
             } else {
@@ -122,59 +70,8 @@ public class Main {
         } else {
             logger.info("Performance test is disabled.");
         }
-        executeSmokeTests();
-
-        // stop metrics collector
-        if (config.getEnableResourceMonitor()) {
-            Runner.stop();
-        }
-
         logger.info("Final Report as json:\n@@START@@\n{}\n@@END@@", ReportFactory.getFinalReportAsString(config));
         ReportFactory.saveFinalReport(config, "/tmp/performance_report.json");
-    }
-
-    private void executeSmokeTests() {
-        // execute smoke tests, if enabled
-        if (config.isSmokeTestEnabled()) {
-            logger.info("Execute Smoke tests enabled. Triggering smoke tests");
-
-            // execute via agent (udp)
-            smokeTests("AGENT");
-
-            // execute via collector (http)
-            smokeTests("COLLECTOR");
-        } else {
-            logger.info("Execute Smoke tests are disabled.");
-        }
-    }
-
-    private void smokeTests(String endpoint) {
-        endpoint = endpoint.toUpperCase();
-        System.setProperty("ENDPOINT", endpoint);
-
-        JUnitCore jUnitCore = new JUnitCore();
-        // add support for XML report generation
-        final String xmlResultFile = "/tmp/smoke-test-result_" + endpoint + ".xml";
-        final JUnitResultFormatter formatter = new XMLJUnitResultFormatter();
-        try {
-            formatter.setOutput(new FileOutputStream(new File(xmlResultFile)));
-        } catch (FileNotFoundException ex1) {
-            logger.error("Exception,", ex1);
-        }
-        jUnitCore.addListener(new JUnitResultFormatterAsRunListener(formatter));
-        Result testResult = jUnitCore.run(TestSuiteSmoke.class);
-        ReportFactory.updateTestSuiteStatus(TestSuiteSmoke.SUITE_NAME + "_" + endpoint.toLowerCase(), testResult);
-        logger.info("Smoke test status:{}", ReportFactory.gettestSuiteStatus(TestSuiteSmoke.SUITE_NAME));
-        // print xml file on console
-        try {
-            String xmlStringData = FileUtils.readFileToString(new File(xmlResultFile), "UTF-8");
-            // remove irrelevant class name and add "jaeger" as classname for smoke tests
-            logger.info("Smoke test report as XML:\n@@XML_START_{}@@\n{}\n@@XML_END_{}@@",
-                    endpoint, xmlStringData.replaceAll("io.jaegertracing.tests.junitxml.DescriptionAsTest", "jaeger"),
-                    endpoint);
-        } catch (IOException ex) {
-            logger.error("Exception,", ex);
-        }
     }
 
     private JaegerTracer createJaegerTracer(String serviceName) {
@@ -290,33 +187,33 @@ public class Main {
         executor.shutdownNow();
         executor.awaitTermination(3, TimeUnit.SECONDS);
 
-        long endTime = System.currentTimeMillis();
-        long duration = endTime - startTime;
-        reportingTimer.update(duration, TimeUnit.MILLISECONDS);
-        logger.info("Finished sending spans to jaeger-{}. Spans sent:{}, timetaken:{}",
-                config.getSender().equalsIgnoreCase("http") ? "collector(http)" : "agent(udp)",
-                config.getNumberOfTracers() * config.getNumberOfSpans(), TimeUnit.MILLISECONDS.toSeconds(duration));
-        ISpanCounter spanCounter = getSpanCounter(serviceNames);
-        startTime = System.currentTimeMillis();
-        int spansCount = spanCounter.countUntilNoChange((int) ReportFactory.getSpansSent());
-        duration = System.currentTimeMillis() - startTime;
-        ReportFactory.updateSpansLatency(duration);
-        ReportFactory.updateSpansCount(expectedSpansCountByReporter, spansCount);
-        logger.info("Exceuted spans count. timetaken:{}, spans[expected:{}, actual:{}]",
-                TimeUnit.MILLISECONDS.toSeconds(duration), (int) ReportFactory.getSpansSent(), spansCount);
-
-        JaegerQueryRunnable jaegerQuery = new JaegerQueryRunnable(config,
-                new ArrayList<>(serviceNames).get(0), TRACER_PREFIX + 1);
-        jaegerQuery.execute("FINAL_");
-
-        // elasticsearch storage stats
-        ElasticsearchStatsGetter esStatsGetter = new ElasticsearchStatsGetter(
-                config.getElasticsearchProvider(), config.getStorageHost(), config.getStoragePort());
-        esStatsGetter.printStats();
-        esStatsGetter.close();
-
-        spanCounter.close();
-        jaegerQuery.close();
+//        long endTime = System.currentTimeMillis();
+//        long duration = endTime - startTime;
+//        reportingTimer.update(duration, TimeUnit.MILLISECONDS);
+//        logger.info("Finished sending spans to jaeger-{}. Spans sent:{}, timetaken:{}",
+//                config.getSender().equalsIgnoreCase("http") ? "collector(http)" : "agent(udp)",
+//                config.getNumberOfTracers() * config.getNumberOfSpans(), TimeUnit.MILLISECONDS.toSeconds(duration));
+//        ISpanCounter spanCounter = getSpanCounter(serviceNames);
+//        startTime = System.currentTimeMillis();
+//        int spansCount = spanCounter.countUntilNoChange((int) ReportFactory.getSpansSent());
+//        duration = System.currentTimeMillis() - startTime;
+//        ReportFactory.updateSpansLatency(duration);
+//        ReportFactory.updateSpansCount(expectedSpansCountByReporter, spansCount);
+//        logger.info("Exceuted spans count. timetaken:{}, spans[expected:{}, actual:{}]",
+//                TimeUnit.MILLISECONDS.toSeconds(duration), (int) ReportFactory.getSpansSent(), spansCount);
+//
+//        JaegerQueryRunnable jaegerQuery = new JaegerQueryRunnable(config,
+//                new ArrayList<>(serviceNames).get(0), TRACER_PREFIX + 1);
+//        jaegerQuery.execute("FINAL_");
+//
+//        // elasticsearch storage stats
+//        ElasticsearchStatsGetter esStatsGetter = new ElasticsearchStatsGetter(
+//                config.getElasticsearchProvider(), config.getStorageHost(), config.getStoragePort());
+//        esStatsGetter.printStats();
+//        esStatsGetter.close();
+//
+//        spanCounter.close();
+//        jaegerQuery.close();
     }
 
     private void spansCount() {

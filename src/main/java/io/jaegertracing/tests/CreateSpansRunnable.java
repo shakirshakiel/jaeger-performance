@@ -51,10 +51,6 @@ public class CreateSpansRunnable implements Runnable {
                 _printed = true;
                 logger.trace("Started sending spans, tracer:{}", name);
             }
-            Map<String, Object> logs = new HashMap<>();
-            logs.put("event", Tags.ERROR);
-            logs.put("error.object", new RuntimeException());
-            logs.put("class", this.getClass().getName());
             int count = 0;
             long startTime = System.currentTimeMillis();
             do {
@@ -70,8 +66,36 @@ public class CreateSpansRunnable implements Runnable {
                         .withTag(Tags.HTTP_STATUS.getKey(), 200)
                         .withTag(Tags.HTTP_URL.getKey(), "http://www.example.com/foo/bar?q=bar")
                         .start();
-                span.log(logs);
+                for (int i = 0; i < 64; i++) {
+                    Map<String, Object> logs = new HashMap<>();
+                    logs.put("event" + i, Tags.ERROR);
+                    logs.put("error.object" + i, new RuntimeException());
+                    logs.put("class" + i, this.getClass().getName());
+                    span.log(logs);
+                }
                 span.finish();
+
+                for (int j = 0; j < 3; j++) {
+                    String operationName = name + j;
+                    Span childSpan = tracer.buildSpan(operationName).asChildOf(span)
+                            .withTag(Tags.COMPONENT.getKey(), "perf-test-child")
+                            .withTag(Tags.SPAN_KIND.getKey(), Tags.SPAN_KIND_CLIENT)
+                            .withTag(Tags.HTTP_METHOD.getKey(), "get")
+                            .withTag(Tags.HTTP_STATUS.getKey(), 200)
+                            .withTag(Tags.HTTP_URL.getKey(), "http://www.example.com/foo/bar?q=bar")
+                            .start();
+
+                    for (int i = 0; i < 5; i++) {
+                        Map<String, Object> logs = new HashMap<>();
+                        logs.put("event" + i, Tags.ERROR);
+                        logs.put("error.object" + i, new RuntimeException());
+                        logs.put("class" + i, this.getClass().getName());
+                        childSpan.log(logs);
+                    }
+
+                    childSpan.finish();
+                }
+
                 try {
                     TimeUnit.MILLISECONDS.sleep(delay);
                 } catch (InterruptedException ex) {

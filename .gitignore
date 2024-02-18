@@ -29,3 +29,4 @@ hs_err_pid*
 
 # Generated code
 gen-java
+.envrc
