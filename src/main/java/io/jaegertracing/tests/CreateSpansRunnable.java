@@ -1,5 +1,5 @@
 /**
- * Copyright 2018-2019 The Jaeger Authors
+ * Copyright 2018-2024 The Jaeger Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
  * in compliance with the License. You may obtain a copy of the License at
@@ -13,10 +13,7 @@
  */
 package io.jaegertracing.tests;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 import io.jaegertracing.internal.JaegerTracer;
@@ -29,6 +26,14 @@ import lombok.extern.slf4j.Slf4j;
 public class CreateSpansRunnable implements Runnable {
     private boolean _printed = false;
     private long reporterEndTime;
+
+    private static String[] HTTP_METHODS = {
+            "get", "head", "post", "put", "delete", "options", "patch"
+    };
+
+    private static String[] EVENT_TYPES = {
+            "info", "warn", "debug", "trace", "error", "fatal"
+    };
 
     private boolean isValid() {
         return System.currentTimeMillis() < reporterEndTime;
@@ -51,6 +56,7 @@ public class CreateSpansRunnable implements Runnable {
                 _printed = true;
                 logger.trace("Started sending spans, tracer:{}", name);
             }
+
             int count = 0;
             long startTime = System.currentTimeMillis();
             do {
@@ -62,15 +68,14 @@ public class CreateSpansRunnable implements Runnable {
                 Span span = tracer.buildSpan(name)
                         .withTag(Tags.COMPONENT.getKey(), "perf-test")
                         .withTag(Tags.SPAN_KIND.getKey(), Tags.SPAN_KIND_CLIENT)
-                        .withTag(Tags.HTTP_METHOD.getKey(), "get")
-                        .withTag(Tags.HTTP_STATUS.getKey(), 200)
-                        .withTag(Tags.HTTP_URL.getKey(), "http://www.example.com/foo/bar?q=bar")
+                        .withTag(Tags.HTTP_METHOD.getKey(), HTTP_METHODS[new Random().nextInt(HTTP_METHODS.length)])
+                        .withTag(Tags.HTTP_STATUS.getKey(), new Random().nextInt(500))
+                        .withTag(Tags.HTTP_URL.getKey(), String.format("http://www.example.com/foo/bar?q=bar&uuid=%s", UUID.randomUUID().toString()))
                         .start();
                 for (int i = 0; i < 64; i++) {
                     Map<String, Object> logs = new HashMap<>();
-                    logs.put("event" + i, Tags.ERROR);
-                    logs.put("error.object" + i, new RuntimeException());
-                    logs.put("class" + i, this.getClass().getName());
+                    logs.put("event", EVENT_TYPES[new Random().nextInt(EVENT_TYPES.length)]);
+                    logs.put("event.log", String.format("Event at %tc with UUID %s", System.currentTimeMillis(), UUID.randomUUID().toString()));
                     span.log(logs);
                 }
                 span.finish();
@@ -79,17 +84,16 @@ public class CreateSpansRunnable implements Runnable {
                     String operationName = name + j;
                     Span childSpan = tracer.buildSpan(operationName).asChildOf(span)
                             .withTag(Tags.COMPONENT.getKey(), "perf-test-child")
-                            .withTag(Tags.SPAN_KIND.getKey(), Tags.SPAN_KIND_CLIENT)
-                            .withTag(Tags.HTTP_METHOD.getKey(), "get")
-                            .withTag(Tags.HTTP_STATUS.getKey(), 200)
-                            .withTag(Tags.HTTP_URL.getKey(), "http://www.example.com/foo/bar?q=bar")
+                            .withTag(Tags.SPAN_KIND.getKey(), Tags.SPAN_KIND_SERVER)
+                            .withTag(Tags.HTTP_METHOD.getKey(), HTTP_METHODS[new Random().nextInt(HTTP_METHODS.length)])
+                            .withTag(Tags.HTTP_STATUS.getKey(), new Random().nextInt(500))
+                            .withTag(Tags.HTTP_URL.getKey(), String.format("http://www.example.com/foo/bar?q=bar&uuid=%s", UUID.randomUUID().toString()))
                             .start();
 
                     for (int i = 0; i < 5; i++) {
                         Map<String, Object> logs = new HashMap<>();
-                        logs.put("event" + i, Tags.ERROR);
-                        logs.put("error.object" + i, new RuntimeException());
-                        logs.put("class" + i, this.getClass().getName());
+                        logs.put("event", EVENT_TYPES[new Random().nextInt(EVENT_TYPES.length)]);
+                        logs.put("event.log", String.format("Event at %tc with UUID %s", System.currentTimeMillis(), UUID.randomUUID().toString()));
                         childSpan.log(logs);
                     }
 
